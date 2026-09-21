@@ -70,18 +70,28 @@ RUN install -d -o machinist -g machinist "${AGENT_HOME}" \
 # itself. That makes the image non-reproducible: the same commit builds a
 # different image over time. Pin with --build-arg MACHINIST_VERSION=v0.4.0 when
 # that matters.
+#
+# The newest tag comes from the public release redirect, NOT api.github.com: the
+# unauthenticated API allows only 60 requests per hour per IP, and a shared or
+# recently recycled cloud IP can already have exhausted that. Each network step
+# fails loudly with its own message, so a broken build says which call failed
+# instead of just exiting 1.
 RUN set -eu; \
     version="${MACHINIST_VERSION}"; \
     if [ -z "$version" ] || [ "$version" = "latest" ]; then \
-      version=$(curl -fsSL -H 'Accept: application/vnd.github+json' \
-        https://api.github.com/repos/owainlewis/machinist/releases/latest \
-        | jq -r '.tag_name'); \
+      effective=$(curl -fsSLS -o /dev/null -w '%{url_effective}' \
+        https://github.com/owainlewis/machinist/releases/latest) \
+        || { printf 'could not resolve the newest Machinist release; pass --build-arg MACHINIST_VERSION=<tag>\n' >&2; exit 1; }; \
+      version=${effective##*/}; \
       printf 'MACHINIST_VERSION not set; using the newest release: %s\n' "$version" >&2; \
     fi; \
     printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+' \
-      || { printf 'invalid MACHINIST_VERSION "%s": expected a release tag or latest\n' "$version" >&2; exit 1; }; \
-    curl -fsSL "https://raw.githubusercontent.com/owainlewis/machinist/${version}/install.sh" \
-      | env MACHINIST_VERSION="$version" MACHINIST_INSTALL_DIR=/usr/local/bin sh; \
+      || { printf 'invalid MACHINIST_VERSION "%s": expected a release tag such as v0.4.0\n' "$version" >&2; exit 1; }; \
+    curl -fsSLS -o /tmp/machinist-install.sh \
+      "https://raw.githubusercontent.com/owainlewis/machinist/${version}/install.sh" \
+      || { printf 'could not download install.sh for %s\n' "$version" >&2; exit 1; }; \
+    env MACHINIST_VERSION="$version" MACHINIST_INSTALL_DIR=/usr/local/bin sh /tmp/machinist-install.sh; \
+    rm -f /tmp/machinist-install.sh; \
     machinist version
 
 COPY deploy/container/entrypoint.sh /usr/local/bin/machinist-entrypoint
