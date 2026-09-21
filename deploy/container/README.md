@@ -66,12 +66,17 @@ it — I could not test Coolify's handling of `network_mode: host`.
 ## Deploying on Coolify
 
 1. Create a Docker Compose resource from this repository with the
-   `docker-compose` build pack. Set the Compose file to `docker-compose.yml`, or
-   to `docker-compose.bridge.yml` if Coolify rejects host networking.
-2. Prefer enabling Raw Compose Deployment so Coolify does not inject networks or
-   proxy labels. Never attach a domain.
-3. Deploy, then reach the UI from your laptop with a tunnel to the port in use —
-   `7331` for host networking, `7444` for the bridge variant:
+   `docker-compose` build pack.
+   - Tunnel-only: `docker-compose.yml` (host networking) is the safer default.
+   - Exposing a domain: you must use `docker-compose.bridge.yml`, because the
+     proxy has to reach the container over a Docker network and host networking
+     gives the proxy nowhere to route.
+2. **Raw Compose Deployment is only for the tunnel-only path.** Do not enable it
+   when you want a domain: Coolify's documentation states that in raw mode you must
+   supply the proxy labels yourself, and these Compose files contain none. Leaving
+   raw mode off is what makes Coolify generate the router for your domain.
+3. Tunnel path only: reach the UI from your laptop on the port in use — `7331` for
+   host networking, `7444` for the bridge variant:
 
    ```sh
    ssh -N -L 7331:127.0.0.1:7331 <server>
@@ -126,7 +131,26 @@ docker run --rm --entrypoint caddy caddy:2-alpine hash-password --plaintext 'you
 ```
 
 Then point a Coolify domain at the **`caddy`** service on internal port **8080**,
-for example `https://machinist.example.com:8080`. Coolify terminates TLS.
+for example `https://machinist.example.com:8080`. The port is not optional: the
+suffix is what tells the proxy which container port receives the request. Coolify
+terminates TLS.
+
+Raw Compose Deployment must be **off** for this to work, since Coolify only
+generates the router and certificate when it manages the labels itself.
+
+### If the domain says "No available server"
+
+Check what the edge returns before changing anything:
+
+| Symptom | Meaning |
+| --- | --- |
+| `404` over HTTP plus a **self-signed** certificate over HTTPS | Traefik has no router for the hostname: the domain is not configured on the `caddy` service, the internal port suffix is missing, or Raw Compose Deployment is on |
+| `502` or `503` with a **valid** certificate | The router exists and the certificate is issued, but no healthy backend answered: check the `caddy` logs |
+| `401` with `WWW-Authenticate: Basic` | Working as intended; that is the proxy asking for credentials |
+
+The `caddy` container also refuses to start when `MACHINIST_EXPOSED` is true and
+the credentials or token are missing, which shows up as an unhealthy service
+rather than a proxy fault.
 
 ### Where the worker token comes from
 
