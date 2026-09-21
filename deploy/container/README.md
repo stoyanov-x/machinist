@@ -9,11 +9,14 @@ program.
 Files:
 
 - `Dockerfile` — Ubuntu image with Git, GitHub CLI, Codex, Claude Code and the
-  pinned Machinist release.
+  newest Machinist release.
 - `entrypoint.sh` — supervises the control plane and the managed worker.
+- `Caddyfile` and `proxy-entrypoint.sh` — the optional credential-gated proxy that
+  publishes the UI, so an SSH tunnel is not required.
 - `../../docker-compose.yml` — Coolify service definition using host networking.
 - `../../docker-compose.bridge.yml` — alternative using bridge networking plus a
-  loopback forwarder, for hosts or platforms that reject host networking.
+  loopback forwarder, for hosts or platforms that reject host networking. It also
+  defines the optional proxy.
 
 ## Three constraints this packaging works around
 
@@ -30,10 +33,11 @@ These come from Machinist itself and shape everything else.
    then closed, which `curl` reports as `Empty reply from server`. Confirmed by
    control experiment: the same publish reaches a process listening on `0.0.0.0`
    correctly. There are two ways out, and both are shipped here.
-3. **Never attach a domain.** The UI has no authentication, the submit endpoint
-   requires a loopback browser `Origin`, and `docs/vm-deployment.md` says not to
-   put it behind a public proxy. An external URL would be both unauthenticated
-   and unable to submit work.
+3. **A domain on its own does not work.** The UI has no authentication of its own,
+   the submit endpoint normally requires a loopback browser `Origin`, and
+   `docs/vm-deployment.md` says not to put it behind a public proxy. Exposing it
+   needs credentials *and* a way past the `Origin` check. There is one, described
+   under *Exposing the UI* below.
 
 ## Choosing a networking mode
 
@@ -79,6 +83,81 @@ it — I could not test Coolify's handling of `network_mode: host`.
 `MACHINIST_CPUS` and `MACHINIST_MEMORY` are Compose variables Coolify exposes
 for editing. The Machinist version is not a per-resource setting; see *Version
 selection* below.
+
+## Exposing the UI (no SSH tunnel)
+
+The tunnel is not the only option. Machinist's `authorizeSubmission` accepts a
+valid Bearer worker token *instead of* the browser `Origin`/CSRF check, so a proxy
+that injects that header lets an ordinary browser on a real domain submit work.
+`docker-compose.bridge.yml` ships a `caddy` service that does exactly that, behind
+HTTP basic auth, and it refuses to start without credentials so an unauthenticated
+admin UI cannot reach the internet by accident.
+
+### Variables to set in Coolify
+
+Under the resource's **Environment Variables**:
+
+| Variable | Default | Required | Meaning |
+| --- | --- | --- | --- |
+| `MACHINIST_EXPOSED` | `true` | no | `false` publishes nothing and idles the proxy |
+| `MACHINIST_AUTH_USER` | – | yes | basic auth username |
+| `MACHINIST_AUTH_PASSWORD_HASH` | – | yes | bcrypt hash of the password |
+| `MACHINIST_TOKEN` | – | yes | the worker token (below) |
+| `MACHINIST_PROXY_PORT` | `8091` | no | host port the proxy is published on, for local use |
+
+Generate the hash, since `basic_auth` expects bcrypt:
+
+```sh
+docker run --rm --entrypoint caddy caddy:2-alpine hash-password --plaintext 'your-password'
+```
+
+Then point a Coolify domain at the **`caddy`** service on internal port **8080**,
+for example `https://machinist.example.com:8080`. Coolify terminates TLS.
+
+### Where the worker token comes from
+
+`machinist init` generates 32 random bytes, hex-encoded to 64 characters, and
+writes them to `~/.machinist/server/worker.token` in the volume. It is the same
+value named by `server.worker_token_file` in `config.toml` and by
+`control_plane.token_file` in `worker.toml`, so the worker already uses it.
+
+Read it out of the running container:
+
+```sh
+docker exec -it <container> cat /home/machinist/.machinist/server/worker.token
+```
+
+**It rotates when the volume is recreated.** A fresh volume makes `init` run again
+and mint a new token, so `MACHINIST_TOKEN` has to be updated to match or every
+submission fails with `401 invalid worker token`.
+
+### Verified behaviour
+
+Measured against the bridge variant with the proxy in front:
+
+```text
+GET  /                                  no credentials -> 401  (proxy refuses)
+GET  /                                  basic auth     -> 200  (the real UI)
+POST /api/v1/jobs  Origin https://machinist.example.com, no CSRF -> 400 repository "nope" is not defined
+POST /api/v1/jobs                       no basic auth  -> 401  (proxy refuses)
+```
+
+The `400` is the point: that request cleared the origin and CSRF gate and failed
+only on the repository lookup, which is what makes a browser on a real domain
+work. With `MACHINIST_EXPOSED=false` the proxy idles instead of serving.
+
+### What you are accepting
+
+- **Upstream advises against this.** `docs/vm-deployment.md` says not to put the
+  unauthenticated UI behind a public proxy. This overrides that deliberately, with
+  compensating controls. Make it a conscious decision.
+- **Those credentials are effectively full admin.** They can read job history,
+  prompts and repository names, and queue runs.
+- **The worker token grants job submission**, which means arbitrary agent execution
+  on the worker with your GitHub and model credentials. It stays in Coolify's
+  environment and is injected server side; it never reaches the browser.
+- **Basic auth over TLS is real but weak.** Coolify's SSO/forward-auth or an OAuth
+  proxy in front would be stronger.
 
 ## First-run setup
 

@@ -21,6 +21,13 @@
 # endpoint rejects any non-loopback browser Origin):
 #
 #   ssh -N -L 7444:127.0.0.1:7444 <server>
+#
+# Or expose it publicly and skip the tunnel. Set MACHINIST_AUTH_USER,
+# MACHINIST_AUTH_PASSWORD_HASH and MACHINIST_TOKEN, then point a Coolify domain
+# at the `caddy` service on internal port 8080. The proxy puts HTTP basic auth
+# in front of the UI and injects the worker token so submissions pass. Read
+# "Exposing the UI" in deploy/container/README.md first -- it is a real
+# trade-off, and the UI has no authentication of its own.
 
 services:
   machinist:
@@ -50,6 +57,38 @@ services:
         limits:
           cpus: "${MACHINIST_CPUS:-2.0}"
           memory: "${MACHINIST_MEMORY:-4g}"
+
+  # Optional public entry point for the UI, so you do not need an SSH tunnel.
+  #
+  # The UI has no authentication of its own, and upstream warns against putting
+  # it behind a public proxy. This service therefore requires HTTP basic auth,
+  # refuses to start without it, and injects the worker token upstream so the
+  # submit endpoint's loopback Origin check is satisfied. Read "Exposing the UI"
+  # in deploy/container/README.md before relying on it.
+  #
+  # On by default. Set MACHINIST_EXPOSED=false to publish nothing and keep using
+  # the tunnel above; the container then idles instead of serving.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/etc/machinist-proxy/entrypoint.sh"]
+    depends_on:
+      machinist:
+        condition: service_healthy
+    environment:
+      MACHINIST_EXPOSED: "${MACHINIST_EXPOSED:-true}"
+      MACHINIST_AUTH_USER: "${MACHINIST_AUTH_USER:-}"
+      MACHINIST_AUTH_PASSWORD_HASH: "${MACHINIST_AUTH_PASSWORD_HASH:-}"
+      MACHINIST_TOKEN: "${MACHINIST_TOKEN:-}"
+    ports:
+      # Loopback only, and not needed in production: Coolify's proxy reaches this
+      # service over the compose network. The publish exists so the same stack
+      # can be exercised locally. The default avoids 8080, which is very often
+      # already taken.
+      - "${MACHINIST_PROXY_BIND:-127.0.0.1}:${MACHINIST_PROXY_PORT:-8091}:8080"
+    volumes:
+      - ./deploy/container/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/container/proxy-entrypoint.sh:/etc/machinist-proxy/entrypoint.sh:ro
 
 volumes:
   machinist-home:

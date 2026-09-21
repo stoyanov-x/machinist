@@ -1,0 +1,34 @@
+# Public entry point for the Machinist UI. Used by docker-compose.bridge.yml.
+#
+# Two things make this work, and both are deliberate.
+#
+# 1. basic_auth. Machinist's UI has NO authentication of its own, and
+#    docs/vm-deployment.md says plainly not to put it behind a public proxy.
+#    Everything here therefore sits behind credentials, and the container refuses
+#    to start when they are missing rather than exposing an open admin UI.
+#
+# 2. The Authorization header injected upstream. Machinist's authorizeSubmission
+#    accepts a valid Bearer worker token INSTEAD of the browser Origin/CSRF
+#    check, and that is the only reason a browser on a real domain can submit
+#    work at all -- the built-in check demands scheme http and a loopback
+#    hostname. The token stays server side; it never reaches the browser.
+#
+# Verified locally: POST with Origin https://machinist.example.com plus the
+# Bearer token clears the origin and CSRF gate and fails only on the repository
+# lookup, while the same request without a token gets 403.
+
+{
+	# TLS terminates at Coolify's proxy in front of this container.
+	auto_https off
+	admin off
+}
+
+:8080 {
+	basic_auth {
+		{$MACHINIST_AUTH_USER} {$MACHINIST_AUTH_PASSWORD_HASH}
+	}
+
+	reverse_proxy machinist:7444 {
+		header_up Authorization "Bearer {$MACHINIST_TOKEN}"
+	}
+}
