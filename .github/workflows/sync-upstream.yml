@@ -1,0 +1,67 @@
+name: Sync with upstream
+
+# Keeps this fork's `main` current with owainlewis/machinist.
+#
+# This deliberately performs a real merge instead of using GitHub's "Sync fork"
+# button. That button only fast-forwards, so once this fork carries its own
+# commits it stops offering a fast-forward and instead offers to DISCARD them.
+# Merging preserves the container-packaging commits in this fork.
+#
+# A conflict fails the job loudly and pushes nothing, leaving `main` untouched
+# rather than half-merged. Nothing here ever force-pushes.
+
+on:
+  schedule:
+    # 06:17 UTC daily. Off the hour to avoid the scheduled-workflow stampede.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge upstream/main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/owainlewis/machinist.git
+          git fetch --no-tags upstream main
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "main already contains upstream/main; nothing to do."
+            exit 0
+          fi
+
+          echo "Upstream commits to merge:"
+          git log --oneline HEAD..upstream/main
+
+          if git merge --no-edit upstream/main; then
+            git push origin main
+            echo "Synced main to $(git rev-parse --short upstream/main)."
+          else
+            git merge --abort || true
+            echo "::error::Merge conflict against upstream/main. Nothing was pushed. Resolve it locally."
+            exit 1
+          fi
+
+      - name: Show remaining local commits
+        if: always()
+        run: |
+          git fetch --no-tags upstream main 2>/dev/null || true
+          echo "Local commits not in upstream/main:"
+          git log --oneline upstream/main..HEAD || true
