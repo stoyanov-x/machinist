@@ -69,9 +69,14 @@ services:
   # On by default. Set MACHINIST_EXPOSED=false to publish nothing and keep using
   # the tunnel above; the container then idles instead of serving.
   caddy:
-    image: caddy:2-alpine
+    # Built from the repository rather than bind mounting the Caddyfile and
+    # entrypoint: Coolify deploys from a directory where those relative paths may
+    # not exist, and Docker then creates a directory at the missing path and the
+    # container fails with "not a directory". See deploy/container/proxy.Dockerfile.
+    build:
+      context: .
+      dockerfile: deploy/container/proxy.Dockerfile
     restart: unless-stopped
-    entrypoint: ["/bin/sh", "/etc/machinist-proxy/entrypoint.sh"]
     depends_on:
       machinist:
         condition: service_healthy
@@ -86,9 +91,6 @@ services:
       # can be exercised locally. The default avoids 8080, which is very often
       # already taken.
       - "${MACHINIST_PROXY_BIND:-127.0.0.1}:${MACHINIST_PROXY_PORT:-8091}:8080"
-    volumes:
-      - ./deploy/container/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./deploy/container/proxy-entrypoint.sh:/etc/machinist-proxy/entrypoint.sh:ro
 
 volumes:
   machinist-home:

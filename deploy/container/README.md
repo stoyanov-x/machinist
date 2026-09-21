@@ -11,8 +11,8 @@ Files:
 - `Dockerfile` — Ubuntu image with Git, GitHub CLI, Codex, Claude Code and the
   newest Machinist release.
 - `entrypoint.sh` — supervises the control plane and the managed worker.
-- `Caddyfile` and `proxy-entrypoint.sh` — the optional credential-gated proxy that
-  publishes the UI, so an SSH tunnel is not required.
+- `Caddyfile`, `proxy-entrypoint.sh` and `proxy.Dockerfile` — the optional
+  credential-gated proxy that publishes the UI, so an SSH tunnel is not required.
 - `../../docker-compose.yml` — Coolify service definition using host networking.
 - `../../docker-compose.bridge.yml` — alternative using bridge networking plus a
   loopback forwarder, for hosts or platforms that reject host networking. It also
@@ -137,6 +137,13 @@ terminates TLS.
 
 Raw Compose Deployment must be **off** for this to work, since Coolify only
 generates the router and certificate when it manages the labels itself.
+
+The proxy is built from `proxy.Dockerfile` rather than pulling `caddy:2-alpine`
+with its configuration bind mounted. Coolify deploys from a directory where a
+relative bind source may not exist, and Docker then creates a *directory* at the
+missing path, so the container dies with `cannot create subdirectories in
+".../etc/caddy/Caddyfile": not a directory`. Baking the files into an image
+removes that dependency.
 
 ### If the domain says "No available server"
 
