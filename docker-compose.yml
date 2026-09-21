@@ -1,0 +1,59 @@
+# Coolify deployment for Machinist.
+#
+# `network_mode: host` is REQUIRED here, not a preference.
+#
+# The control plane binds 127.0.0.1 inside its network namespace, and Docker's
+# `ports:` publishing forwards to the *container's* IP rather than to its
+# loopback. A published port therefore can never reach it: the connection is
+# accepted by the Docker proxy and then closed, which curl reports as "Empty
+# reply from server". Docker's own publishing is not at fault -- the same
+# `-p 127.0.0.1:PORT:PORT` mechanism serves a process listening on 0.0.0.0
+# correctly.
+#
+# With host networking the container shares the host's network namespace, so
+# Machinist binds the *host's* loopback. That keeps the security posture
+# upstream requires -- the UI is reachable only from the host itself -- and
+# makes an SSH tunnel work, because sshd then connects to loopback.
+#
+# Deploy this with Coolify's Raw Compose Deployment so Coolify does not inject
+# its own network and proxy labels, which conflict with host networking.
+#
+# Reach the UI from your laptop, then browse to http://127.0.0.1:7331
+# (the literal 127.0.0.1, not a hostname or Tailscale address: the submit
+# endpoint rejects any non-loopback browser Origin):
+#
+#   ssh -N -L 7331:127.0.0.1:7331 <server>
+#
+# The control plane and the worker share ONE container on purpose: the control
+# plane refuses any non-loopback listen address and the worker refuses plain
+# http to a non-loopback control_plane.url, so they need one network namespace.
+
+services:
+  machinist:
+    build:
+      context: .
+      dockerfile: deploy/container/Dockerfile
+      # The image installs the newest upstream release. To pin one instead:
+      #   args:
+      #     MACHINIST_VERSION: v0.4.0
+    restart: unless-stopped
+
+    # No ports: with host networking the app binds the host loopback directly.
+    network_mode: host
+
+    volumes:
+      # Credentials ($HOME/.codex, $HOME/.claude, $HOME/.config/gh), registered
+      # repository clones, and Machinist state ($HOME/.machinist) all live here.
+      - machinist-home:/home/machinist
+
+    # Agent runs build and test real code. Keep them from starving the Coolify
+    # host. Adjust to suit the server. The healthcheck is in the Dockerfile so
+    # that a plain `docker run` is also checked.
+    deploy:
+      resources:
+        limits:
+          cpus: "${MACHINIST_CPUS:-2.0}"
+          memory: "${MACHINIST_MEMORY:-4g}"
+
+volumes:
+  machinist-home:

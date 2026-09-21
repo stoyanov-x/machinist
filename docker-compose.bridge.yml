@@ -1,0 +1,55 @@
+# Coolify deployment for Machinist using ordinary bridge networking.
+#
+# Use this INSTEAD of docker-compose.yml when Coolify will not accept
+# `network_mode: host` (Raw Compose Deployment is still the recommended mode).
+# It is otherwise identical, and it is the only variant that can be fully tested
+# on Docker Desktop for macOS, whose host networking is a VM boundary.
+#
+# Why a forwarder is needed: the control plane binds 127.0.0.1, and Docker's
+# port publishing forwards to the container's IP rather than its loopback, so a
+# published port can never reach the control plane directly. The entrypoint
+# therefore runs socat inside the container, listening on the container's
+# interfaces and relaying to 127.0.0.1:7331.
+#
+# !! The publish below MUST keep its 127.0.0.1 host-IP prefix. !!
+# The forwarder listens on 0.0.0.0 inside the container by necessity, so a bare
+# "7444:7444" would bind every host interface and expose the unauthenticated
+# Machinist UI to the internet.
+#
+# Reach the UI from your laptop, then browse to http://127.0.0.1:7444
+# (the literal 127.0.0.1, with the port from MACHINIST_FORWARD_PORT -- the submit
+# endpoint rejects any non-loopback browser Origin):
+#
+#   ssh -N -L 7444:127.0.0.1:7444 <server>
+
+services:
+  machinist:
+    build:
+      context: .
+      dockerfile: deploy/container/Dockerfile
+      # The image installs the newest upstream release. To pin one, add an args
+      # block with MACHINIST_VERSION: v0.4.0, as docker-compose.yml notes.
+    restart: unless-stopped
+
+    environment:
+      # Opts the entrypoint into starting the socat forwarder.
+      MACHINIST_FORWARD_PORT: "7444"
+
+    ports:
+      # Loopback only. See the warning above before changing the host IP.
+      - "127.0.0.1:7444:7444"
+
+    volumes:
+      # Credentials ($HOME/.codex, $HOME/.claude, $HOME/.config/gh), registered
+      # repository clones, and Machinist state ($HOME/.machinist) all live here.
+      - machinist-home:/home/machinist
+
+    # Agent runs build and test real code. Keep them from starving the host.
+    deploy:
+      resources:
+        limits:
+          cpus: "${MACHINIST_CPUS:-2.0}"
+          memory: "${MACHINIST_MEMORY:-4g}"
+
+volumes:
+  machinist-home:

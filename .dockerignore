@@ -1,0 +1,9 @@
+# The build only copies deploy/container/entrypoint.sh, so keep the context
+# small and keep build output out of the image layer cache. `.env` is excluded
+# because Compose users keep values there, including secrets.
+.git
+.github
+bin
+.env
+*.md
+evals
