@@ -38,10 +38,22 @@ RUN apt-get update \
 # Pin GitHub's published host keys so git-over-SSH works without an interactive
 # first-connection prompt. docs/vm-deployment.md asks you to compare the
 # fingerprints by hand; this is the same published data over HTTPS.
+#
+# api.github.com allows only 60 unauthenticated requests per hour per IP and
+# answers 403 once exhausted, which was observed on a real host. An empty
+# known_hosts would break `git clone` over SSH later, so fall back to ssh-keyscan
+# rather than silently writing nothing.
 RUN install -d -m 0755 /etc/ssh \
- && curl -fsSL https://api.github.com/meta \
-      | jq -r '.ssh_keys[]' \
-      | sed 's|^|github.com |' > /etc/ssh/ssh_known_hosts
+ && { curl -fsSLS -o /tmp/gh-meta.json https://api.github.com/meta \
+      && jq -r '.ssh_keys[]' /tmp/gh-meta.json | sed 's|^|github.com |' > /etc/ssh/ssh_known_hosts; } \
+    || true \
+ && if [ ! -s /etc/ssh/ssh_known_hosts ]; then \
+      printf 'warning: api.github.com did not return host keys (rate limited?); falling back to ssh-keyscan\n' >&2; \
+      ssh-keyscan -t rsa,ecdsa,ed25519 github.com > /etc/ssh/ssh_known_hosts 2>/dev/null || true; \
+    fi \
+ && rm -f /tmp/gh-meta.json \
+ && test -s /etc/ssh/ssh_known_hosts \
+ || { printf 'could not obtain GitHub SSH host keys from the API or ssh-keyscan\n' >&2; exit 1; }
 
 # The unprivileged runtime account, matching the upstream VM deployment.
 RUN useradd --create-home --shell /bin/bash machinist
