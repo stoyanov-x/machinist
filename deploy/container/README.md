@@ -95,15 +95,29 @@ admin UI cannot reach the internet by accident.
 
 ### Variables to set in Coolify
 
-Under the resource's **Environment Variables**:
+Under the resource's **Environment Variables**. Coolify detects these from the
+Compose definition and offers them for editing.
 
-| Variable | Default | Required | Meaning |
-| --- | --- | --- | --- |
-| `MACHINIST_EXPOSED` | `true` | no | `false` publishes nothing and idles the proxy |
-| `MACHINIST_AUTH_USER` | – | yes | basic auth username |
-| `MACHINIST_AUTH_PASSWORD_HASH` | – | yes | bcrypt hash of the password |
-| `MACHINIST_TOKEN` | – | yes | the worker token (below) |
-| `MACHINIST_PROXY_PORT` | `8091` | no | host port the proxy is published on, for local use |
+| Variable | Default | Required | Scope | Meaning |
+| --- | --- | --- | --- | --- |
+| `MACHINIST_EXPOSED` | `true` | no | runtime | `false` publishes nothing and idles the proxy |
+| `MACHINIST_AUTH_USER` | – | yes | runtime | basic auth username |
+| `MACHINIST_AUTH_PASSWORD_HASH` | – | yes | runtime | bcrypt hash of the password |
+| `MACHINIST_TOKEN` | – | yes | runtime | the worker token (below) |
+| `MACHINIST_PROXY_PORT` | `8091` | no | runtime | host port the proxy is published on, for local use |
+
+**Runtime only, so disable Build Variable on every one of them.** Nothing here
+affects the image build: the Dockerfile reads none of these values, and
+`MACHINIST_VERSION` is the only build argument in the image and is not set through
+Coolify. Coolify's own guidance is to disable Build Variable for a secret the
+application only reads after the container starts, and it warns that build
+arguments can remain visible in image metadata. A useful side effect: because
+these are runtime values, changing one needs a restart rather than a rebuild.
+
+**Enable Literal on `MACHINIST_AUTH_PASSWORD_HASH`.** It is a bcrypt hash and so
+contains `$` characters, for example `$2a$14$...`. Without Literal, Coolify
+expands those as variable references, the stored hash stops matching, and basic
+auth rejects every password. Multiline is not needed.
 
 Generate the hash, since `basic_auth` expects bcrypt:
 
